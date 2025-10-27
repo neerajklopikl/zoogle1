@@ -2,14 +2,14 @@
 import 'package:flutter/material.dart';
 import 'package:zooogle/widgets/transactions/unit_selection_dialog.dart';
 
-// This is the data class we will return to the CreateTransactionScreen
+// InvoiceLineItem class remains the same...
 class InvoiceLineItem {
   final String name;
   final double quantity;
   final double rate;
   final String unit;
   final String taxType;
-  
+
   InvoiceLineItem({
     required this.name,
     required this.quantity,
@@ -42,16 +42,19 @@ class AddItemScreen extends StatefulWidget {
 
 class _AddItemScreenState extends State<AddItemScreen> {
   final _formKey = GlobalKey<FormState>();
-  // Add controllers to get the text
   final _nameController = TextEditingController();
-  final _qtyController = TextEditingController(text: '1'); // Default qty to 1
+  final _qtyController = TextEditingController(text: '1');
   final _rateController = TextEditingController();
   final _nameFocusNode = FocusNode();
 
   String _selectedUnit = 'Nos';
   String _taxType = 'Without Tax';
 
+  // --- NEW: Add a saving flag ---
+  bool _isSaving = false;
+
   void _showUnitSelectionDialog() async {
+    // ... (dialog logic remains the same)
     final result = await showModalBottomSheet<String>(
       context: context,
       isScrollControlled: true,
@@ -65,10 +68,19 @@ class _AddItemScreenState extends State<AddItemScreen> {
     }
   }
 
-  // --- NEW SAVE FUNCTION ---
+  // --- MODIFIED SAVE FUNCTION ---
   void _saveItem({bool saveAndNew = false}) {
-    if (_formKey.currentState!.validate()) {
-      // 1. Create the item object from controller values
+    // Exit if already saving or form is invalid
+    if (_isSaving || !_formKey.currentState!.validate()) {
+      return;
+    }
+
+    // --- Start saving ---
+    setState(() {
+      _isSaving = true;
+    });
+
+    try {
       final newItem = InvoiceLineItem(
         name: _nameController.text.isNotEmpty ? _nameController.text : 'Item',
         quantity: double.tryParse(_qtyController.text) ?? 1.0,
@@ -77,9 +89,12 @@ class _AddItemScreenState extends State<AddItemScreen> {
         taxType: _taxType,
       );
 
+      // Call the callback provided by the parent screen
       widget.onSave(newItem);
 
+      // Handle navigation or reset based on the button pressed
       if (saveAndNew) {
+        // Reset form fields
         _formKey.currentState!.reset();
         _nameController.clear();
         _qtyController.text = '1';
@@ -88,13 +103,32 @@ class _AddItemScreenState extends State<AddItemScreen> {
           _selectedUnit = 'Nos';
           _taxType = 'Without Tax';
         });
+        // Request focus back to the name field for quick entry
         _nameFocusNode.requestFocus();
       } else {
-        Navigator.pop(context);
+        // Close the AddItemScreen
+        if (mounted) { // Check if the widget is still in the tree
+           Navigator.pop(context);
+        }
+      }
+    } catch (e) {
+       // Handle potential errors during onSave callback or state updates
+       if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+             SnackBar(content: Text('Error processing item: $e')),
+          );
+       }
+    } finally {
+      // --- Finish saving, re-enable buttons ---
+      // Use mounted check before calling setState if the operation could be long
+      if (mounted) {
+        setState(() {
+          _isSaving = false;
+        });
       }
     }
   }
-  // --- END NEW SAVE FUNCTION ---
+  // --- END MODIFIED SAVE FUNCTION ---
 
   @override
   void dispose() {
@@ -115,9 +149,10 @@ class _AddItemScreenState extends State<AddItemScreen> {
         padding: const EdgeInsets.all(16.0),
         child: Form(
           key: _formKey,
+          // Form fields remain mostly the same...
           child: Column(
             children: [
-              TextFormField(
+               TextFormField(
                 controller: _nameController, // Assign controller
                 focusNode: _nameFocusNode,
                 decoration: const InputDecoration(
@@ -126,9 +161,10 @@ class _AddItemScreenState extends State<AddItemScreen> {
                   border: OutlineInputBorder(),
                 ),
                 validator: (value) {
-                  if (value == null || value.isEmpty) {
-                    return 'Please enter an item name';
-                  }
+                  // Keep validator, or adjust if empty names are allowed ('Item')
+                  // if (value == null || value.isEmpty) {
+                  //   return 'Please enter an item name';
+                  // }
                   return null;
                 },
               ),
@@ -143,12 +179,18 @@ class _AddItemScreenState extends State<AddItemScreen> {
                         border: OutlineInputBorder(),
                       ),
                       keyboardType: TextInputType.number,
+                       validator: (value) { // Add basic validation
+                        if (value == null || value.isEmpty || double.tryParse(value) == null) {
+                          return 'Enter valid quantity';
+                        }
+                        return null;
+                      },
                     ),
                   ),
                   const SizedBox(width: 16),
                   Expanded(
                     child: InkWell(
-                      onTap: _showUnitSelectionDialog,
+                      onTap: _isSaving ? null : _showUnitSelectionDialog, // Disable tap during save
                       child: InputDecorator(
                         decoration: const InputDecoration(
                           labelText: 'Unit',
@@ -177,6 +219,12 @@ class _AddItemScreenState extends State<AddItemScreen> {
                         border: OutlineInputBorder(),
                       ),
                       keyboardType: TextInputType.number,
+                      validator: (value) { // Add basic validation
+                        if (value == null || value.isEmpty || double.tryParse(value) == null) {
+                          return 'Enter valid rate';
+                        }
+                        return null;
+                      },
                     ),
                   ),
                   const SizedBox(width: 16),
@@ -192,7 +240,7 @@ class _AddItemScreenState extends State<AddItemScreen> {
                                 child: Text(label),
                               ))
                           .toList(),
-                      onChanged: (value) {
+                      onChanged: _isSaving ? null : (value) { // Disable during save
                         if (value != null) {
                           setState(() {
                             _taxType = value;
@@ -213,23 +261,29 @@ class _AddItemScreenState extends State<AddItemScreen> {
           children: [
             Expanded(
               child: OutlinedButton(
-                onPressed: () => _saveItem(saveAndNew: true),
+                // --- Disable button when saving ---
+                onPressed: _isSaving ? null : () => _saveItem(saveAndNew: true),
                 style: OutlinedButton.styleFrom(
                   padding: const EdgeInsets.symmetric(vertical: 16),
                 ),
-                child: const Text('Save & New'),
+                child: _isSaving
+                    ? const SizedBox(height: 20, width: 20, child: CircularProgressIndicator(strokeWidth: 2))
+                    : const Text('Save & New'),
               ),
             ),
             const SizedBox(width: 12),
             Expanded(
               child: ElevatedButton(
-                onPressed: () => _saveItem(), // --- CALL THE NEW SAVE FUNCTION ---
+                // --- Disable button when saving ---
+                onPressed: _isSaving ? null : () => _saveItem(),
                 style: ElevatedButton.styleFrom(
                   padding: const EdgeInsets.symmetric(vertical: 16),
                   backgroundColor: Colors.red.shade600,
                   foregroundColor: Colors.white,
                 ),
-                child: const Text('Save'),
+                child: _isSaving
+                    ? const SizedBox(height: 20, width: 20, child: CircularProgressIndicator(strokeWidth: 2, valueColor: AlwaysStoppedAnimation(Colors.white)))
+                    : const Text('Save'),
               ),
             ),
           ],
